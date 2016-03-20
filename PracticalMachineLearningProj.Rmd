@@ -1,0 +1,170 @@
+# **Title: Practical Machine Learning Course Project using Weight Lifting Exercises Dataset from Human Activity Recognition (HAR) Research**
+* Author: Rama Neti
+* Date: March 20, 2016
+
+# **Executive Summary**
+### The goal of the project is to use data from accelerometers on the belt, forearm, arm, and dumbbell of six male participants aged between 20-28 years, with little weight lifting experience for predicting the manner in which they did the exercise. The exercise involves performing barbell lifts correctly and incorrectly in 5 different ways (Class A: exactly according to the specification; Class B: throwing the elbows to the front; Class C: lifting the dumbbell only halfway; Class D: lowering the dumbbell only halfway; Class E: throwing the hips to the front)
+
+### The main objectives of this project are as follows
+###(i)    Predict the manner in which the participants did the exercise using the "classe" and any other variables
+###(ii)   Build a prediction model using different features and cross-validation technique
+###(iii)  Calculate the out of sample error
+###(iv)   Use the prediction model to predict 20 different test cases provided
+###(v)    This classifier predicts if an exercise has been done correctly (class A)
+
+### More information on the dataset can be found on the website: <http://groupware.les.inf.puc-rio.br/har>
+
+## **1. Data**
+###The training data for this project are available here: <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+###The test data are available here: <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+## **2. Download and Read Training and Testing Data into Data Frames**
+
+```{r ReadData, echo=TRUE, message=F, warning=F}
+# Set Working Directory
+  setwd("D:/Documents/DataScience/Machine Learning/Project")
+
+# Load Libraries
+  library(caret)
+  library(randomForest)
+  library(rpart)
+  library(rpart.plot)
+  library(ggplot2)
+  library(lattice)
+  library(rattle)
+  library(ipred)
+  options(warn=-1)
+  
+  trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  trainFile <- "D:/Documents/DataScience/Machine Learning/Project/training.csv"
+  testFile  <- "D:/Documents/DataScience/Machine Learning/Project/testing.csv"
+
+  if (!file.exists(trainFile)) {
+  download.file(trainURL, destfile=trainFile)
+  }
+
+  if (!file.exists(testFile)) {
+  download.file(testURL, destfile=testFile)
+  }
+# (a) Load training and testing data (b) Replace invalid strings as "NA"
+  trainingDataSet <- read.csv("./training.csv" ,na.strings=c("NA","#DIV/0!",""))
+  testingDataSet <- read.csv("./testing.csv" ,na.strings=c("NA","#DIV/0!",""))
+  dim(trainingDataSet)
+  dim(testingDataSet)
+```
+## **3. Data Cleansing and Preproccesing of the variables**
+
+```{r CleanseData, echo=TRUE, message=F, warning=F}
+# Remove unnecessary columns
+# Drop first 7 columns that do not contain useful info such as X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, num_window that are irrelevant
+
+  training  <- trainingDataSet[,-c(1:7)]
+  testing <- testingDataSet[,-c(1:7)]
+
+  dim(training)
+  dim(testing)
+
+# Remove columns with NAs This reduces the number of predictors to 53
+
+  training <- training [,colSums(is.na(training))==0]
+  testing <- testing [,colSums(is.na(testing))==0]
+
+  dim(training)
+  dim(testing)
+# Remove highly correlated variables Highly correlated variables can sometimes reduce the performance of a model, and will be excluded. However, this way of selection is disputable: http://arxiv.org/abs/1310.5726
+
+# Set last (classe) and prior (- classe) column index
+  last <- as.numeric(ncol(training))
+  prior <- last - 1
+
+# set variables to numerics for correlation check, except the "classe"
+  for (i in 1:prior) {
+  training[,i] <- as.numeric(training [,i])
+  testing [,i] <- as.numeric(testing [,i])
+  }
+
+# Find the highly correlated variables
+  highly.cor <- findCorrelation(cor(training [, -c(last)]), cutoff=0.9)
+
+# Remove highly correlated variables
+  training <- training [, -highly.cor]
+  testing <- testing [, -highly.cor]
+
+  dim(training)
+  dim(testing)
+
+# Pre-proccesing of the variables. The amount of predictors is now 46. We will continue with the pre-processing of these predictors, by centering and scaling them. Remember that the last column of the validation set contained the problem_id.
+
+# Pre-process variables
+  prior <- ncol(training) - 1
+  preObj <-preProcess(training[,1:prior],method=c('knnImpute', 'center', 'scale'))
+  
+  TrainDataPrep <- predict(preObj, training[,1:prior])
+  TrainDataPrep$classe <- training$classe
+
+  TestDataPrep <-predict(preObj,testing[,1:prior])
+  TestDataPrep$problem_id <- testing$problem_id
+```
+## **4. Create a cross validation data set**
+### We now perform cross validation by splitting the training data into training (75%) and validation (25%) and fitting a model using training data and then predicting it using validation data. The accuracy of prediction should reflect the accuracy of the model.
+```{r CrossValidationData, echo=TRUE, message=F, warning=F}
+# Divide training data to training and validation (75% training, 25% validation)
+  inTrain <- createDataPartition(y= TrainDataPrep$classe, p=0.75, list=F)
+  training <- TrainDataPrep[inTrain,]
+  validation <- TrainDataPrep[-inTrain,]
+  dim(training)
+  dim(validation)
+  summary(training)
+```
+## **5.Comparison of Classification and Predictive Models**
+### We choose Decision Tree, Bagging and Random Forest as we would expect them to give the best results.
+### **I. Decision Tree algorithm**
+```{r DecisionTree, echo=TRUE, message=F, warning=F}
+# Set seed for reproducibility
+  set.seed(12345)
+
+  modelfitDT <- rpart(classe ~., data=training, method="class")
+  prp(modelfitDT)
+
+  predictionDT  <- predict(modelfitDT, validation, type="class")
+
+# Summarize Decision Tree results
+  resultDT <- confusionMatrix(predictionDT,validation$classe)
+  resultDT
+```
+### **II. Bagging Algorithm**
+```{r Bagging, echo=TRUE, message=F, warning=F}
+# Use Bootstraping Aggregating method
+  modelfitBG <- bagging(classe ~., data=training)
+  predictionBG <- predict(modelfitBG, validation)
+# Summarize Bagging results
+  resultBG <- confusionMatrix(predictionBG, validation$classe)
+  resultBG
+```
+### **III. Random Forest (improved bagging) Algorithm**
+```{r RandomForest, echo=TRUE, message=F, warning=F}
+# Use randomForest model to train and predict
+  modelfitRF <- randomForest(classe ~., data=training, na.action=na.omit)
+  predictionRF <- predict(modelfitRF, validation, type="class")
+# Summarize randomForest results
+  resultRF <- confusionMatrix(predictionRF, validation$classe)
+  resultRF
+```
+## **6. Model Selection**
+### We now compare the accuracy of trained models (Decision Tree, Bagging and Random Forest) on validation data, and choose the one with the highest accuracy
+```{r ModelSelect, echo=TRUE, message=F, warning=F}
+  results <- data.frame(resultDT$overall, resultBG$overall, resultRF$overall)
+  results
+```
+### While Bagging and Random Forest seem to be more accurate, Random Forest is more accurate compared to the generic Bagging algorithm.
+
+## **7. Training the model**
+### We now train the model by applying the Random Forest trained model on testing data and obtain the test results. 
+```{r TrainModel, echo=TRUE, message=F, warning=F}
+  TestResults <- predict(modelfitRF, TestDataPrep, type="class")
+  TestResults
+```
+
+## **Conclusion:**
+### Random Forest has the most accuracy of `r round(resultRF$overall[1],3)` with 95% CI values of (`r round(resultRF$overall[3],3)`, `r round(resultRF$overall[4],3)`). So we expect that less than 1 prediction can be wrong in 20 predictions.
